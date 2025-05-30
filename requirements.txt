@@ -1,1 +1,8 @@
 streamlit
+pubchempy
+pandas
+requests
+ase
+py3Dmol
+rdkit
+stmol
