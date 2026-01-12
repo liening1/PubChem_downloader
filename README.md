@@ -11,3 +11,4 @@
    ```
    $ streamlit run streamlit_app.py
    ```
+https://pubchemdownloaderxyz.streamlit.app
