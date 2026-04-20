@@ -1,6 +1,6 @@
 # Atlas Molecule Studio (PubChem Downloader)
 
-Atlas Molecule Studio is a Streamlit web app for fetching molecule structures from PubChem, converting them to multiple file formats, and visualizing them interactively.
+Atlas Molecule Studio is a Streamlit web app for fetching molecule structures from PubChem, converting them to multiple file formats, and visualizing them in 3D.
 
 Live app:
 https://pubchemdownloaderxyz.streamlit.app
@@ -22,7 +22,7 @@ https://pubchemdownloaderxyz.streamlit.app
    - synonym search
    - formula search
    - autocomplete fallback
-- Added automatic `3D -> 2D` record fallback when 3D records are unavailable.
+- Switched to `3D-only` visualization in the UI, with internal `3D-first -> 2D fallback` data retrieval when 3D coordinates are unavailable.
 - Added persistent Streamlit session state so switching sections or format selectors does not lose run context.
 - Reworked results into three persistent workflow sections:
    - `Deliverables`

@@ -22,7 +22,6 @@ SESSION_DEFAULTS = {
     "failures": [],
     "requested_count": 0,
     "has_run": False,
-    "last_record_pref": "3D",
     "last_query_input": "",
     "active_result_section": "Deliverables",
 }
@@ -402,7 +401,7 @@ def render_brand_header() -> None:
                     </div>
                     <div class="signal-card">
                         <span>Resilience</span>
-                        <strong>Automatic 3D and 2D record fallback</strong>
+                        <strong>3D-first retrieval with internal 2D fallback</strong>
                     </div>
                 </div>
             </div>
@@ -580,13 +579,16 @@ def resolve_compound_cid(query: str) -> Tuple[Optional[int], str]:
     return None, "no PubChem match found"
 
 
-def fetch_sdf_with_fallback(cid: int, preferred_record: str) -> Tuple[Optional[str], Optional[str]]:
-    sequence = ["3d", "2d"] if preferred_record.lower() == "3d" else ["2d", "3d"]
+def fetch_sdf_prefer_3d(cid: int) -> Tuple[Optional[str], Optional[str]]:
     url = f"{PUBCHEM_PUG_BASE}/compound/cid/{cid}/SDF"
-    for record_type in sequence:
-        sdf_text = request_text(url, params={"record_type": record_type})
-        if sdf_text and "M  END" in sdf_text:
-            return sdf_text, record_type
+    sdf_3d = request_text(url, params={"record_type": "3d"})
+    if sdf_3d and "M  END" in sdf_3d:
+        return sdf_3d, "3D"
+
+    sdf_2d = request_text(url, params={"record_type": "2d"})
+    if sdf_2d and "M  END" in sdf_2d:
+        return sdf_2d, "2D fallback"
+
     return None, None
 
 
@@ -626,7 +628,8 @@ def build_summary_dataframe(results: List[Dict[str, Optional[str]]]) -> pd.DataF
             "Molecular Weight": [item["weight"] for item in results],
             "CID": [item["cid"] for item in results],
             "Search Path": [item["matched_by"] for item in results],
-            "Record Used": [item["record_type_used"].upper() for item in results],
+            "Mode": ["3D" for _ in results],
+            "Data Source": [item.get("source_record", "3D") for item in results],
         }
     )
 
@@ -652,7 +655,7 @@ def render_metric_strip(requested: int, resolved: int, failed: int, fallback_cou
                 <div class="value">{failed}</div>
             </div>
             <div class="metric-block">
-                <div class="label">3D to 2D fallback</div>
+                <div class="label">2D source fallback</div>
                 <div class="value">{fallback_count}</div>
             </div>
         </div>
@@ -680,7 +683,6 @@ def render_viewer_from_sdf(moldata: str, height: int = 430) -> None:
 
 def process_queries(
     requested_queries: List[str],
-    preferred_record: str,
 ) -> Tuple[List[Dict[str, Optional[str]]], List[Dict[str, str]]]:
     sdf_dir = "structures_sdf"
     xyz_dir = "structures_xyz"
@@ -707,9 +709,9 @@ def process_queries(
                 failures.append({"query": query, "error": matched_by})
                 continue
 
-            sdf_text, record_type_used = fetch_sdf_with_fallback(cid, preferred_record)
-            if not sdf_text or not record_type_used:
-                failures.append({"query": query, "error": "SDF record unavailable from PubChem"})
+            sdf_text, source_record = fetch_sdf_prefer_3d(cid)
+            if not sdf_text or not source_record:
+                failures.append({"query": query, "error": "No PubChem SDF record available (3D/2D)."})
                 continue
 
             try:
@@ -757,7 +759,7 @@ def process_queries(
                     "formula": molecular_formula,
                     "weight": molecular_weight,
                     "matched_by": matched_by,
-                    "record_type_used": record_type_used,
+                    "source_record": source_record,
                     "sdf_path": sdf_path,
                     "xyz_path": xyz_path,
                     "coord_path": coord_path,
@@ -797,6 +799,7 @@ def render_sidebar() -> None:
         st.markdown("- name and synonym")
         st.markdown("- formula")
         st.markdown("- autocomplete fallback")
+        st.markdown("- 3D-first, then internal 2D fallback")
 
         st.markdown("### Output Suite")
         st.markdown("- MOL or SDF")
@@ -807,6 +810,8 @@ def render_sidebar() -> None:
         st.markdown("### Latest Update")
         st.markdown("- Robust uncommon-molecule search pipeline")
         st.markdown("- Persistent section and format switching")
+        st.markdown("- 3D-only visualization mode")
+        st.markdown("- Internal 2D source fallback when 3D is missing")
         st.markdown("- Upgraded Atlas UI and workflow layout")
 
         st.markdown("---")
@@ -835,15 +840,7 @@ with left_col:
 
 with right_col:
     st.markdown('<p class="panel-title">Run controls</p>', unsafe_allow_html=True)
-    record_type = st.segmented_control(
-        "Preferred structure",
-        ["3D", "2D"],
-        selection_mode="single",
-        default=st.session_state["last_record_pref"],
-        key="preferred_record_radio",
-    )
-    if record_type is None:
-        record_type = st.session_state["last_record_pref"]
+    st.markdown("**Visualization mode:** 3D only")
 
     fetch_clicked = st.button("Run retrieval pipeline", type="primary", use_container_width=True)
     clear_clicked = st.button("Clear current results", use_container_width=True)
@@ -863,12 +860,11 @@ if fetch_clicked:
     if not requested_queries:
         st.warning("Please enter at least one molecule name, formula, synonym, or CID.")
     else:
-        results, failures = process_queries(requested_queries, record_type)
+        results, failures = process_queries(requested_queries)
         st.session_state["results"] = results
         st.session_state["failures"] = failures
         st.session_state["requested_count"] = len(requested_queries)
         st.session_state["has_run"] = True
-        st.session_state["last_record_pref"] = record_type
         st.session_state["last_query_input"] = molecule_input
 
         st.session_state.pop("content_selected_molecule", None)
@@ -879,9 +875,8 @@ if st.session_state["has_run"]:
     results = st.session_state["results"]
     failures = st.session_state["failures"]
     requested = st.session_state["requested_count"]
-    preferred = st.session_state["last_record_pref"].lower()
+    fallback_count = sum(1 for item in results if item.get("source_record") == "2D fallback")
 
-    fallback_count = sum(1 for item in results if item["record_type_used"] != preferred)
     render_metric_strip(
         requested=requested,
         resolved=len(results),
@@ -955,7 +950,7 @@ if st.session_state["has_run"]:
                         <p class="name">{item['query']}</p>
                         <p class="meta">
                             CID {item['cid']} | Formula: {item['formula']} | Weight: {item['weight']}<br/>
-                            Matched by: {item['matched_by']} | Record: {item['record_type_used'].upper()}
+                            Matched by: {item['matched_by']} | Mode: 3D | Source: {item.get('source_record', '3D')}
                         </p>
                     </div>
                     """,
@@ -1028,7 +1023,7 @@ if st.session_state["has_run"]:
                 f"""
                 <div class="molecule-card">
                     <p class="name">{selected_item['query']}</p>
-                    <p class="meta">CID {selected_item['cid']} | Record used: {selected_item['record_type_used'].upper()} | Search path: {selected_item['matched_by']}</p>
+                    <p class="meta">CID {selected_item['cid']} | Mode: 3D | Source: {selected_item.get('source_record', '3D')} | Search path: {selected_item['matched_by']}</p>
                 </div>
                 """,
                 unsafe_allow_html=True,
